@@ -111,13 +111,13 @@ func hash(server *HashHttpServer, resp http.ResponseWriter, req *http.Request) {
 
     // Parse the raw query and update req.Form.
     if err := req.ParseForm(); err != nil {
-        //fmt.Println("ParseForm() err: %v\n", err)
+        log.Println("ERROR: ParseForm() err: %v\n", err)
         fmt.Fprintf(resp, "ParseForm() err: %v", err)
         return
     }
 
     password := req.PostFormValue("password")
-    //fmt.Println("Password is", password)
+    //Don't log passwords fmt.Println("Password is", password)
     if password == "" {
         resp.WriteHeader(422) // Unprocessable Entity
         return
@@ -130,7 +130,7 @@ func hash(server *HashHttpServer, resp http.ResponseWriter, req *http.Request) {
     // Get our response id
     server.asyncReq.respIdCounter += 1
     responseId := strconv.FormatInt(server.asyncReq.respIdCounter, 10)
-    //fmt.Println("ResponseId", responseId, server.stats.count)
+    log.Println("INFO: ResponseId", responseId, server.stats.count)
 
     // Mark response as not (yet) available
     server.asyncReq.asyncResults[responseId] = ""
@@ -148,9 +148,9 @@ func hash(server *HashHttpServer, resp http.ResponseWriter, req *http.Request) {
 // asyncHashHandler: the function that actually does the hashing and posts the results
 // into the map (to be picked up later by asyncReturns)
 func asyncHashHandler(password string, server *HashHttpServer, responseId string) {
+    log.Println("INFO: asyncHashHandler started")
     time.Sleep(5 * time.Second)
 
-    //fmt.Println("asyncHashHandler")
 
     // Get sha512 of the password
     hashedPass := sha512.Sum512([]byte(password))
@@ -164,6 +164,7 @@ func asyncHashHandler(password string, server *HashHttpServer, responseId string
     
     // record us done for clean shutdowns
     server.waitg.Done()
+    log.Println("INFO: asyncHashHandler finished")
 }
 
 // asyncReturns: handler for any unknown url AND for requests for async returns.
@@ -186,18 +187,18 @@ func asyncReturns(server *HashHttpServer, resp http.ResponseWriter, req *http.Re
         if results == "" {
 	    // Results not available yet
 	    // Return accepted
-	    //fmt.Println("Request for", responseId, "not available (yet)")
+	    log.Println("INFO: Request for", responseId, "not available (yet)")
 	    resp.WriteHeader(202)
 	    return
 	} else {
 	    // Results are availabe - return then and remove them from map
-	    //fmt.Println("Request for", responseId, results)
+	    log.Println("INFO: Request for", responseId, results)
 	    fmt.Fprintf(resp, results)
 	    delete(server.asyncReq.asyncResults, responseId)
 	}
     } else {
 	// Invalid path/responseId - we have never heard of it (or results were already returned)
-	//fmt.Println("Request for", responseId, "unknown")
+	log.Println("INFO: Request for", responseId, "unknown")
 	resp.WriteHeader(404)
 	return
     }

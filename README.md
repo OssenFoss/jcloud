@@ -1,7 +1,15 @@
 # jcloud
 Code for our good friends ...
 
-go run hashserver/main.go 8080
+# To start the server
+go run hashserver/main.go -port 8080 -logfile logs    
+
+#
+Usage: hashserver
+  -logfile string
+    	file name for logging information (if not specified, logging is to stderr)
+  -port int
+    	the port the server will listen on (default 8080)
 
 See tests directory for some excercisers.
 

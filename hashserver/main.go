@@ -3,29 +3,32 @@ package main
 
 import (
     "github.com/ossenfoss/jcloud/hashhttpserver"
+    "flag"
     "fmt"
+    "log"
     "os"
-    "path"
-    "strconv"
 )
 
-func Usage() {
-    fmt.Println("go run", path.Base(os.Args[0]), "PortNumber")
-    os.Exit(-1)
-}
 func main() {
-
     var portnum int
-    var err error
-    if len(os.Args) > 1 {
-	// Get port number
-        if portnum, err = strconv.Atoi(os.Args[1]); err != nil || portnum == 0 {
-	    fmt.Println(err)
-	    Usage()
+    var logfile string
+    flag.StringVar(&logfile, "logfile", "", "file name for logging information (if not specified, logging is to stderr)")
+    flag.IntVar(&portnum, "port", 8080, "the port the server will listen on")
+    flag.Usage = func() {
+	    fmt.Println("Usage: hashserver")
+	    flag.PrintDefaults()
 	}
-    } else {
-	Usage()
-    }
+    flag.Parse()
 
+    fmt.Println("Parms", portnum, logfile)
+    // If the file doesn't exist, create it or append to the file
+    if logfile != "" {
+        file, err := os.OpenFile(logfile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+    	    if err != nil {
+                log.Fatal(err)
+            }
+        log.SetOutput(file)
+    }
+    log.Println("Starting hashserver")
     hashhttpserver.ListenAndServe(portnum)
 }
