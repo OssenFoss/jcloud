@@ -1,0 +1,16 @@
+#!/bin/bash
+DATA='password=angryMonkey'
+URL="http://localhost:$1/hash"
+echo $URL
+status=$(curl -w "%{http_code}\\n" -H "Accept:application/json" -H "Content-Type:application/x-www-form-urlencoded" --data $DATA $URL -s -o body)
+echo "STATUS:" $status
+echo -n "BODY:"
+cat body
+echo
+
+URL="http://localhost:$1/$2"
+status=$(curl -w "%{http_code}\\n" -H "Accept:application/json" -H "Content-Type:application/x-www-form-urlencoded" $URL -s -o body)
+echo "STATUS:" $status
+echo -n "BODY:"
+cat body
+echo

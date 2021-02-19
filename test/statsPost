@@ -1,0 +1,8 @@
+#!/bin/bash
+# Try a post request on a stats call - should fail
+URL="http://localhost:$1/stats"
+status=$(curl -w "%{http_code}\\n" -H "Accept:application/json" -H "Content-Type:application/x-www-form-urlencoded" --data "bad=monkey" $URL -s -o statbody)
+echo "STATUS:" $status
+echo -n "BODY:"
+cat statbody
+echo
