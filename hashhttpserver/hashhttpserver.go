@@ -70,9 +70,12 @@ func (stat *Stats) getStats() map[string]int64 {
     }
     return retstats
 }
+//^================ Stats ===============
 
 //================ HashHttpServer ============
 type HashHttpServer struct {
+    htserver	*http.Server
+    handler     *http.ServeMux
     shutdown	bool
     waitg	sync.WaitGroup 
     asyncReq	ResultsMap
@@ -80,12 +83,86 @@ type HashHttpServer struct {
 }
 
 // Construct the HashHttpServer - ctor need to properly init the map
-func NewHashHttpServer() *HashHttpServer {
+func NewHashHttpServer(portnum int) *HashHttpServer {
     var server HashHttpServer
     server.asyncReq.asyncResults = make(map[string]string)
     server.shutdown = false
+    server.handler = http.NewServeMux()
+    server.htserver = &http.Server {
+	Addr:           ":"+strconv.FormatInt(int64(portnum), 10),
+	Handler:        server.handler,
+	}
+
     return &server
 }
+
+func (server *HashHttpServer) HandleFunc(pattern string,
+					 handler func(*HashHttpServer, http.ResponseWriter, *http.Request)) {
+    lamfunc := func(resp http.ResponseWriter, req *http.Request) {
+                        handler(server, resp, req)
+    }
+    server.handler.HandleFunc(pattern, lamfunc)
+ 
+}
+
+// RegisterAsyncReturn: registers for a future return value.
+// returns a string responseId that can be used to update or fetch the eventual return value
+func (server *HashHttpServer) RegisterAsyncReturn(notdonevalue string) (responseId string) {
+    // Lock the request map and respIdCounter
+    server.asyncReq.Lock()
+    defer server.asyncReq.Unlock()
+
+    // Get our response id
+    server.asyncReq.respIdCounter += 1
+    responseId = strconv.FormatInt(server.asyncReq.respIdCounter, 10)
+    log.Println("INFO: ResponseId", responseId, server.stats.count)
+
+    // Mark response as not (yet) available
+    server.asyncReq.asyncResults[responseId] = ""
+
+    return
+}
+
+// SetAsyncReturnValue: records the return value for the given responseId to be picked up by a later request
+func (server *HashHttpServer) SetAsyncReturnValue(responseId string, returnValue string) {
+    server.asyncReq.Lock()
+    defer server.asyncReq.Unlock()
+    server.asyncReq.asyncResults[responseId] = returnValue
+}
+
+/* GetAsyncReturnValue: Gets the return value for the given responseId.
+If the responseId is not registered (either never used or already returned, return ok < 0
+If the registered value is == notdonevalue, return ok > 0
+If the registered value is != notdonevalue, caller is picking up the results, ok = 0
+if ok == 0, the responseId is unregistered and the return value is removed.
+*/
+func (server *HashHttpServer) GetAsyncReturnValue(responseId string, notdonevalue string) (results string, ok int) {
+    // Lock the request map
+    server.asyncReq.Lock()
+    defer server.asyncReq.Unlock()
+
+    var found bool
+    if results, found = server.asyncReq.asyncResults[responseId]; found {
+        if results == notdonevalue {
+            // Results not available yet
+            // Return accepted
+            log.Println("INFO: Request for", responseId, "not available (yet)")
+	    ok = 1
+        } else {
+            // Results are availabe - return then and remove them from map
+            log.Println("INFO: Request for", responseId, results)
+            delete(server.asyncReq.asyncResults, responseId)
+	    ok = 0
+	}
+     } else {
+	// Invalid path/responseId - we have never heard of it (or results were already returned)
+	log.Println("INFO: Request for", responseId, "unknown")
+	ok = -1
+     }
+     return
+}
+
+//^================ HashHttpServer ============
 
 // hash: handler for post requests for hash
 //  Spawns and thread to perform the actual hashing (since it takes too much time)
@@ -123,17 +200,9 @@ func hash(server *HashHttpServer, resp http.ResponseWriter, req *http.Request) {
         return
     }
 
-    // Lock the request map and respIdCounter
-    server.asyncReq.Lock()
-    defer server.asyncReq.Unlock()
+    // Mark our spot for our future return value
+    responseId := server.RegisterAsyncReturn("")
 
-    // Get our response id
-    server.asyncReq.respIdCounter += 1
-    responseId := strconv.FormatInt(server.asyncReq.respIdCounter, 10)
-    log.Println("INFO: ResponseId", responseId, server.stats.count)
-
-    // Mark response as not (yet) available
-    server.asyncReq.asyncResults[responseId] = ""
     // return async request number
     fmt.Fprintf(resp, "%s\n", responseId)
 
@@ -158,9 +227,7 @@ func asyncHashHandler(password string, server *HashHttpServer, responseId string
     //fmt.Println("sha 512", len(hashedPass), hashedPass)
     //fmt.Println("encodedHashedPass", encodedHashedPass)
     
-    server.asyncReq.Lock()
-    defer server.asyncReq.Unlock()
-    server.asyncReq.asyncResults[responseId] = encodedHashedPass
+    server.SetAsyncReturnValue(responseId, encodedHashedPass)
     
     // record us done for clean shutdowns
     server.waitg.Done()
@@ -179,28 +246,19 @@ func asyncReturns(server *HashHttpServer, resp http.ResponseWriter, req *http.Re
     // Extract the responseId from the URL
     responseId := req.URL.Path[1:] // Slice off leading /
 
-    // Lock the request map 
-    server.asyncReq.Lock()
-    defer server.asyncReq.Unlock()
 
-    if results, ok := server.asyncReq.asyncResults[responseId]; ok {
-        if results == "" {
-	    // Results not available yet
-	    // Return accepted
-	    log.Println("INFO: Request for", responseId, "not available (yet)")
-	    resp.WriteHeader(202)
-	    return
-	} else {
-	    // Results are availabe - return then and remove them from map
-	    log.Println("INFO: Request for", responseId, results)
-	    fmt.Fprintf(resp, results)
-	    delete(server.asyncReq.asyncResults, responseId)
-	}
-    } else {
-	// Invalid path/responseId - we have never heard of it (or results were already returned)
-	log.Println("INFO: Request for", responseId, "unknown")
+    results, ok := server.GetAsyncReturnValue(responseId, "")
+    log.Println("GetAsyncReturnValue returned'", results, "' ok=", ok)
+   
+    if ok > 0 {
+	// Not done
+	resp.WriteHeader(202)
+    } else if ok == 0 {
+        // Results done and available
+	fmt.Fprintf(resp, results)
+    } else { 
+        // ResponseId not registered
 	resp.WriteHeader(404)
-	return
     }
 }
 
@@ -226,7 +284,7 @@ func stats(server *HashHttpServer, resp http.ResponseWriter, req *http.Request) 
 // shutdown: handles requests to shutdown the server. net/http/Server provides a graceful 
 // shutdown but, we must also wait for any background calcs (hash) going on. Use wait group 
 // to handle waiting for those.
-func shutdown(server *HashHttpServer, resp http.ResponseWriter, req *http.Request, htserver *http.Server) {
+func shutdown(server *HashHttpServer, resp http.ResponseWriter, req *http.Request) {
     if req.Method != "GET" {
 	// ensure GET only 
 	resp.WriteHeader(405) // Return 405 Method Not Allowed.
@@ -240,7 +298,7 @@ func shutdown(server *HashHttpServer, resp http.ResponseWriter, req *http.Reques
         // Wait for in progress request routines to finish
         server.waitg.Wait()
 
-	if err := htserver.Shutdown(context.Background()); err != nil {
+	if err := server.htserver.Shutdown(context.Background()); err != nil {
 		// Error from closing listeners, or context timeout:
 		log.Fatal(err)
 		}
@@ -255,34 +313,12 @@ func shutdown(server *HashHttpServer, resp http.ResponseWriter, req *http.Reques
 // waits for the server to be shutdown.
 func ListenAndServe(portnum int) {
 
-    handler := http.NewServeMux()
-    htserver := &http.Server {
-	Addr:           ":"+strconv.FormatInt(int64(portnum), 10),
-	Handler:        handler,
-	}
+    server := NewHashHttpServer(portnum)
 
-    server := NewHashHttpServer()
-    statfunc := func(resp http.ResponseWriter, req *http.Request) {
-			stats(server, resp, req)
-    }
-    handler.HandleFunc("/stats", statfunc)
-    shutfunc := func(resp http.ResponseWriter, req *http.Request) {
-			shutdown(server, resp, req, htserver)
-    }
-    handler.HandleFunc("/shutdown", shutfunc)
+    server.HandleFunc("/stats", stats)
+    server.HandleFunc("/shutdown", shutdown)
+    server.HandleFunc("/hash", hash)
+    server.HandleFunc("/", asyncReturns)
 
-    // Get our context into the handler
-    hashfunc := func(resp http.ResponseWriter, req *http.Request) {
-			hash(server, resp, req)
-		}
-
-    handler.HandleFunc("/hash", hashfunc)
-     
-    // Get our context into the handler
-    muxfunc := func(resp http.ResponseWriter, req *http.Request) {
-			asyncReturns(server, resp, req)
-    }
-    handler.HandleFunc("/", muxfunc)
-
-    log.Fatal(htserver.ListenAndServe())
+    log.Fatal(server.htserver.ListenAndServe())
 }
